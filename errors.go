@@ -50,15 +50,15 @@ func newAPIError(status int, body []byte, h http.Header) *Error {
 	}
 }
 
-// Error returns the status, the message truncated to maxMessageLen, and the
-// request id. It never includes the raw body.
+// Error returns the status, the message truncated to maxMessageLen characters,
+// and the request id. It never includes the raw body.
 func (e *Error) Error() string {
 	var b strings.Builder
 	b.WriteString(strconv.Itoa(e.Status))
 	if e.Message != "" {
 		b.WriteByte(' ')
-		if len(e.Message) > maxMessageLen {
-			b.WriteString(e.Message[:maxMessageLen])
+		if runes := []rune(e.Message); len(runes) > maxMessageLen {
+			b.WriteString(string(runes[:maxMessageLen]))
 			b.WriteString("…")
 		} else {
 			b.WriteString(e.Message)

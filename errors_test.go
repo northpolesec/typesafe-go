@@ -2,6 +2,7 @@ package typesafe
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -28,6 +29,10 @@ func TestErrorString(t *testing.T) {
 	long := strings.Repeat("x", 300)
 	got := newAPIError(400, []byte(long), http.Header{}).Error()
 	must.Eq(t, "400 "+strings.Repeat("x", 200)+"…", got)
+
+	longRunes := strings.Repeat("é", 300)
+	got = newAPIError(400, []byte(longRunes), http.Header{}).Error()
+	must.Eq(t, "400 "+strings.Repeat("é", 200)+"…", got)
 }
 
 func TestExtractMessage(t *testing.T) {
@@ -56,6 +61,9 @@ func TestErrorIs(t *testing.T) {
 	must.True(t, errors.Is(newAPIError(529, nil, http.Header{}), ErrOverloaded))
 	must.False(t, errors.Is(newAPIError(500, nil, http.Header{}), ErrOverloaded))
 	must.False(t, errors.Is(newAPIError(403, nil, http.Header{}), ErrAuthentication))
+
+	wrappedRateLimit := fmt.Errorf("typesafe: POST /v1/systemone: %w", newAPIError(429, nil, http.Header{}))
+	must.True(t, errors.Is(wrappedRateLimit, ErrRateLimited))
 
 	var apiErr *Error
 	wrapped := errors.Join(errors.New("outer"), newAPIError(404, nil, http.Header{}))
