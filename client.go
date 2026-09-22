@@ -98,7 +98,7 @@ func New(cfg Config) (*Client, error) {
 	if baseURL == "" {
 		baseURL = DefaultBaseURL
 	}
-	if u, err := url.Parse(baseURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+	if u, err := url.Parse(baseURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
 		return nil, fmt.Errorf("typesafe: Config.BaseURL %q is not an absolute http(s) URL", baseURL)
 	}
 
@@ -251,7 +251,7 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) (st
 	endpoint := c.baseURL + path
 
 	for attempt := 0; ; attempt++ {
-		resp, respBody, err := c.attempt(ctx, method, path, endpoint, payload, attempt)
+		status, header, respBody, err := c.attempt(ctx, method, path, endpoint, payload, attempt)
 
 		var reason string
 		switch {
@@ -264,28 +264,24 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) (st
 			reason = "timeout"
 		case err != nil:
 			reason = "connection error"
-		case resp.StatusCode >= 200 && resp.StatusCode <= 299:
-			requestID := resp.Header.Get(requestIDHeader)
+		case status >= 200 && status <= 299:
+			requestID := header.Get(requestIDHeader)
 			if err := json.Unmarshal(respBody, out); err != nil {
 				return "", wrap(fmt.Errorf("decode response (request %s): %w", requestID, err))
 			}
 			return requestID, nil
 		default:
-			err = newAPIError(resp.StatusCode, respBody, resp.Header)
-			if !retryableStatus(resp.StatusCode) {
+			err = newAPIError(status, respBody, header)
+			if !retryableStatus(status) {
 				return "", wrap(err)
 			}
-			reason = strconv.Itoa(resp.StatusCode)
+			reason = strconv.Itoa(status)
 		}
 
 		if attempt >= c.retry.MaxRetries {
 			return "", wrap(err)
 		}
-		var headers http.Header
-		if resp != nil {
-			headers = resp.Header
-		}
-		delay := backoffDelay(attempt, headers, c.retry, rand.Float64(), time.Now())
+		delay := backoffDelay(attempt, header, c.retry, rand.Float64(), time.Now())
 		c.logger.InfoContext(ctx, "typesafe: retrying",
 			"method", method, "path", path, "attempt", attempt+1, "delay", delay, "reason", reason)
 		if err := sleep(ctx, delay); err != nil {
@@ -295,19 +291,19 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) (st
 }
 
 // attempt performs one HTTP round trip, including reading the body, under
-// Config.Timeout. A non-nil error means no usable response; resp is non-nil
-// only when err is nil.
-func (c *Client) attempt(ctx context.Context, method, path, endpoint string, payload []byte, n int) (*http.Response, []byte, error) {
+// Config.Timeout. A non-nil error means no usable response; status and header
+// are set only when err is nil.
+func (c *Client) attempt(ctx context.Context, method, path, endpoint string, payload []byte, n int) (status int, header http.Header, body []byte, err error) {
 	actx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	var body io.Reader
+	var reqBody io.Reader
 	if payload != nil {
-		body = bytes.NewReader(payload)
+		reqBody = bytes.NewReader(payload)
 	}
-	req, err := http.NewRequestWithContext(actx, method, endpoint, body)
+	req, err := http.NewRequestWithContext(actx, method, endpoint, reqBody)
 	if err != nil {
-		return nil, nil, err
+		return 0, nil, nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("Accept", "application/json")
@@ -326,20 +322,20 @@ func (c *Client) attempt(ctx context.Context, method, path, endpoint string, pay
 	if err != nil {
 		c.logger.DebugContext(ctx, "typesafe: attempt failed",
 			"method", method, "path", path, "attempt", n, "duration", time.Since(start), "error", err)
-		return nil, nil, err
+		return 0, nil, nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
 	if err != nil {
-		return nil, nil, err
+		return 0, nil, nil, err
 	}
 	c.logger.DebugContext(ctx, "typesafe: attempt",
 		"method", method, "path", path, "attempt", n, "status", resp.StatusCode,
 		"duration", time.Since(start), "request_id", resp.Header.Get(requestIDHeader), "body_bytes", len(respBody))
 	if len(respBody) > maxBody {
-		return nil, nil, errResponseTooLarge
+		return 0, nil, nil, errResponseTooLarge
 	}
-	return resp, respBody, nil
+	return resp.StatusCode, resp.Header, respBody, nil
 }
 
 // sleep waits d or until ctx is done, whichever is first.

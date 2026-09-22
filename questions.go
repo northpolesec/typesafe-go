@@ -65,8 +65,10 @@ type questionWire struct {
 	Criteria     any    `json:"criteria,omitempty"`
 }
 
-// MarshalJSON emits the API's tagged object. Nil instructions and criteria
-// are omitted (the JS SDK sends instructions: null; the API accepts both).
+// MarshalJSON emits the API's tagged object. A nil interface is omitted, so
+// Noul(nil) sends no instructions (the JS SDK sends instructions: null; the
+// API accepts both). Choice and Score store the caller's map or slice as-is,
+// so a nil map or slice marshals as criteria: null.
 func (q Question) MarshalJSON() ([]byte, error) {
 	return json.Marshal(questionWire{Type: q.kind, Instructions: q.instructions, Criteria: q.criteria})
 }

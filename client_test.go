@@ -87,6 +87,7 @@ func TestNewRejectsBadConfig(t *testing.T) {
 		{"negative backoff", Config{APIKey: "sk", Retry: &RetryPolicy{BackoffInitial: -1}}, "typesafe: RetryPolicy fields must not be negative"},
 		{"bad base url", Config{APIKey: "sk", BaseURL: "://nope"}, `typesafe: Config.BaseURL "://nope" is not an absolute http(s) URL`},
 		{"relative base url", Config{APIKey: "sk", BaseURL: "api.typesafe.ai"}, `typesafe: Config.BaseURL "api.typesafe.ai" is not an absolute http(s) URL`},
+		{"userinfo in base url", Config{APIKey: "sk", BaseURL: "https://user:pw@host.test"}, `typesafe: Config.BaseURL "https://user:pw@host.test" is not an absolute http(s) URL`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

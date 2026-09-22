@@ -167,15 +167,24 @@ func decodeAnswer(b json.RawMessage) (Answer, error) {
 	switch *tag.Type {
 	case kindNoul:
 		var a NoulAnswer
-		return a, json.Unmarshal(b, &a)
+		if err := json.Unmarshal(b, &a); err != nil {
+			return nil, err
+		}
+		return a, nil
 	case kindChoice:
 		var a ChoiceAnswer
-		return a, json.Unmarshal(b, &a)
+		if err := json.Unmarshal(b, &a); err != nil {
+			return nil, err
+		}
+		return a, nil
 	case kindScore:
 		var a ScoreAnswer
-		return a, json.Unmarshal(b, &a)
+		if err := json.Unmarshal(b, &a); err != nil {
+			return nil, err
+		}
+		return a, nil
 	}
-	return UnknownAnswer{Type: *tag.Type, Raw: append(json.RawMessage(nil), b...)}, nil
+	return UnknownAnswer{Type: *tag.Type, Raw: b}, nil
 }
 
 // DecodeAnswers unmarshals the answers object into dst, a pointer to a struct

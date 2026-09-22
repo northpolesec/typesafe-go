@@ -1,6 +1,7 @@
 package typesafe
 
 import (
+	"math"
 	"net/http"
 	"strconv"
 	"time"
@@ -52,7 +53,7 @@ func retryableStatus(status int) bool {
 // when neither header carries a valid, non-negative delay.
 func parseRetryAfter(h http.Header, now time.Time) (d time.Duration, ok bool) {
 	if v := h.Get("Retry-After-Ms"); v != "" {
-		if ms, err := strconv.ParseInt(v, 10, 64); err == nil && ms >= 0 {
+		if ms, err := strconv.ParseInt(v, 10, 64); err == nil && ms >= 0 && ms <= math.MaxInt64/int64(time.Millisecond) {
 			return time.Duration(ms) * time.Millisecond, true
 		}
 	}
@@ -61,7 +62,7 @@ func parseRetryAfter(h http.Header, now time.Time) (d time.Duration, ok bool) {
 		return 0, false
 	}
 	if secs, err := strconv.ParseFloat(v, 64); err == nil {
-		if secs < 0 {
+		if math.IsNaN(secs) || math.IsInf(secs, 0) || secs < 0 || secs > float64(math.MaxInt64)/float64(time.Second) {
 			return 0, false
 		}
 		return time.Duration(secs * float64(time.Second)), true

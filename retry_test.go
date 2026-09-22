@@ -40,6 +40,10 @@ func TestParseRetryAfter(t *testing.T) {
 		{"http date", http.Header{"Retry-After": {now.Add(30 * time.Second).Format(http.TimeFormat)}}, 30 * time.Second, true},
 		{"http date in past clamps to zero", http.Header{"Retry-After": {now.Add(-30 * time.Second).Format(http.TimeFormat)}}, 0, true},
 		{"garbage", http.Header{"Retry-After": {"soon"}}, 0, false},
+		{"nan ignored", http.Header{"Retry-After": {"NaN"}}, 0, false},
+		{"inf ignored", http.Header{"Retry-After": {"Inf"}}, 0, false},
+		{"ms overflow ignored", http.Header{"Retry-After-Ms": {"9223372036854775807"}}, 0, false},
+		{"seconds overflow ignored", http.Header{"Retry-After": {"1e300"}}, 0, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -72,4 +76,9 @@ func TestBackoffDelay(t *testing.T) {
 	// Over the cap or unparseable: fall back to backoff.
 	must.Eq(t, 500*time.Millisecond, backoffDelay(0, http.Header{"Retry-After": {"120"}}, p, 0, now))
 	must.Eq(t, 500*time.Millisecond, backoffDelay(0, http.Header{"Retry-After": {"soon"}}, p, 0, now))
+
+	// HTTP-date Retry-After: honored within the cap, backoff beyond it.
+	nowSec := now.UTC().Truncate(time.Second)
+	must.Eq(t, 30*time.Second, backoffDelay(0, http.Header{"Retry-After": {nowSec.Add(30 * time.Second).Format(http.TimeFormat)}}, p, 0.9, nowSec))
+	must.Eq(t, 500*time.Millisecond, backoffDelay(0, http.Header{"Retry-After": {nowSec.Add(2 * time.Minute).Format(http.TimeFormat)}}, p, 0, nowSec))
 }

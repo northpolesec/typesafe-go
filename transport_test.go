@@ -9,8 +9,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -131,6 +131,7 @@ func TestSystemOneWarnsOnUnknownAnswerType(t *testing.T) {
 
 	out := logs.String()
 	must.StrContains(t, out, "level=WARN")
+	must.Eq(t, 1, strings.Count(out, "level=WARN"))
 	must.StrContains(t, out, "names=[k]")
 	must.StrContains(t, out, "level=DEBUG")
 	must.StrContains(t, out, "status=200")
@@ -243,27 +244,41 @@ func TestRetryLogsAtInfo(t *testing.T) {
 	must.StrNotContains(t, out, "level=DEBUG", must.Sprint("attempt summaries are DEBUG only"))
 }
 
+// retryingSignal is a slog.Handler that closes done the first time the client
+// logs its "typesafe: retrying" line, which happens immediately before the
+// backoff wait.
+type retryingSignal struct {
+	slog.Handler
+	done chan struct{}
+	once sync.Once
+}
+
+func (h *retryingSignal) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *retryingSignal) Handle(ctx context.Context, r slog.Record) error {
+	if r.Message == "typesafe: retrying" {
+		h.once.Do(func() { close(h.done) })
+	}
+	return h.Handler.Handle(ctx, r)
+}
+
 func TestCancelDuringBackoff(t *testing.T) {
-	c, rec := newServer(t, Config{}, func(w http.ResponseWriter, r *http.Request) {
+	signal := &retryingSignal{Handler: slog.DiscardHandler, done: make(chan struct{})}
+	c, rec := newServer(t, Config{Logger: slog.New(signal)}, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Retry-After", "10")
 		writeJSON(w, 429, ``)
 	})
 	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
 	done := make(chan error, 1)
 	go func() {
 		_, err := c.SystemOne(ctx, Request{Questions: map[string]Question{"q": Noul("x")}})
 		done <- err
 	}()
-	// Wait for the first request to land, then cancel while the client sleeps
-	// on the 10s Retry-After.
-	deadline := time.After(5 * time.Second)
-	for rec.requests.Load() == 0 {
-		select {
-		case <-deadline:
-			t.Fatal("first request never arrived")
-		default:
-			runtime.Gosched()
-		}
+	select {
+	case <-signal.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("client never reached the retry wait")
 	}
 	cancel()
 	select {

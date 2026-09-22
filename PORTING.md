@@ -20,6 +20,8 @@ Ledger of the `typesafe-sdk-js` port into this module, in the format of `chat-go
 - `Answer` is a sealed interface (`NoulAnswer | ChoiceAnswer | ScoreAnswer | UnknownAnswer`); upstream infers types from the question literal; unknown answer types are kept as `UnknownAnswer` and named in one WARN (Python drops them with a warning; JS passes them through)
 - `const Version` bumped on tag, not `debug.ReadBuildInfo()`
 - Response body capped at 8 MiB with an explicit error; upstream has no cap
+- `Config.APIKey` is `TrimSpace`d before validation (Python strips too; JS does not); interior whitespace and non-printable bytes are still rejected
+- `DefaultBaseURL` and `DefaultModel` are exported constants
 
 ## Files
 
