@@ -6,7 +6,6 @@ fmt:
 
 fmt/check:
 	@test -z "$$(gofmt -s -l .)"
-	go vet ./...
 
 lint:
 	go tool golangci-lint run
