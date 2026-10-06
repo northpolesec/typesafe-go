@@ -2,6 +2,10 @@
 
 Ledger of the `typesafe-sdk-js` port into this module, in the format of `chat-go/PORTING.md`. Upstream: https://github.com/typesafe-ai/typesafe-sdk-js `src/`. Wire contract: https://docs.typesafe.ai/api.md. Every change to this module that alters a row below updates it in the same PR.
 
+## Upstream baseline
+
+Ported from typesafe-sdk-js `66880cc` (v0.6.0), cross-checked against typesafe-sdk-python v0.7.1. Last checked 2026-10-06: JS unchanged; Python v0.7.2 (`f078f1e`) adds only an optional `http2` packaging extra, which needs nothing here since `net/http` negotiates HTTP/2 over TLS. Wire contract checked against `openapi.json` version 0.2.0 (`/v1/systemone`, `/v1/models`); every schema, required field, and the `noul`/`choice`/`score` discriminator match this module. When re-checking, diff fresh clones against these commits and diff `openapi.json` against version 0.2.0.
+
 ## Global divergences
 
 - `fetch` → `HTTPDoer` (`*http.Client` satisfies it); nil → package-owned `&http.Client{}`, never `http.DefaultClient`
@@ -15,7 +19,9 @@ Ledger of the `typesafe-sdk-js` port into this module, in the format of `chat-go
 - `APIPromise.asResponse()/withResponse()` → `Result.RequestID` and `Error.RequestID`; `Models` does not expose a request id
 - `instructions: null` (JS `noul()` default) → key omitted when nil; API accepts both
 - Request and response bodies are never logged (JS logs them at `debug`); `Error()` never includes the raw body
-- 255-option and 10-level limits left to the server's 422 (neither upstream SDK checks them); score minimum follows JS (≥2), not Python (≥1)
+- 255-option and 10-level limits left to the server's 422 (neither upstream SDK checks them); score minimum follows JS and api.md (≥2), not Python or openapi.json (`minItems: 1`)
+- `Request.State` nil marshals as `state: null`, as JS allows; `openapi.json` excludes null (expect a 422; not verified live)
+- Score `instructions` is optional here, per `openapi.json` and both SDKs; api.md marks it required
 - `Question` is opaque with constructors; upstream is a plain tagged object
 - `Answer` is a sealed interface (`NoulAnswer | ChoiceAnswer | ScoreAnswer | UnknownAnswer`); upstream infers types from the question literal; unknown answer types are kept as `UnknownAnswer` and named in one WARN (Python drops them with a warning; JS passes them through)
 - `const Version` bumped on tag, not `debug.ReadBuildInfo()`
