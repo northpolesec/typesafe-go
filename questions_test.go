@@ -71,6 +71,10 @@ func TestValidateQuestions(t *testing.T) {
 		`noul question "n" has neither instructions nor criteria; at least one is required`)
 	must.EqError(t, validateQuestions(map[string]Question{"n": NoulWithCriteria(nil, nil, nil)}),
 		`noul question "n" has neither instructions nor criteria; at least one is required`)
+	must.EqError(t, validateQuestions(map[string]Question{"n": Noul((*string)(nil))}),
+		`noul question "n" has neither instructions nor criteria; at least one is required`, must.Sprint("typed nil instructions"))
+	must.EqError(t, validateQuestions(map[string]Question{"n": NoulWithCriteria(json.RawMessage("null"), (*string)(nil), nil)}),
+		`noul question "n" has neither instructions nor criteria; at least one is required`, must.Sprint("typed nil outcome"))
 
 	must.EqError(t, validateQuestions(map[string]Question{"c": Choice("q", nil)}),
 		`choice question "c" has no criteria; at least one choice is required`)

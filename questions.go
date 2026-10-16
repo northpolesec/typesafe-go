@@ -74,6 +74,25 @@ func (q Question) MarshalJSON() ([]byte, error) {
 	return json.Marshal(questionWire{Type: q.kind, Instructions: q.instructions, Criteria: q.criteria})
 }
 
+// encodesNull reports whether v marshals to JSON null, which includes a
+// typed nil such as (*string)(nil). A v that fails to marshal is not null;
+// the request encode reports that error.
+func encodesNull(v any) bool {
+	b, err := json.Marshal(v)
+	return err == nil && string(b) == "null"
+}
+
+// describesOutcome reports whether noul criteria hold a non-null yes or no.
+func describesOutcome(criteria any) bool {
+	c, _ := criteria.(map[string]any)
+	for _, v := range c {
+		if !encodesNull(v) {
+			return true
+		}
+	}
+	return false
+}
+
 // validateQuestions applies the checks the JS SDK makes before sending: at
 // least one question, a noul with instructions or a described outcome, a
 // choice with at least one option, and at least two score levels.
@@ -86,8 +105,7 @@ func validateQuestions(qs map[string]Question) error {
 	for name, q := range qs {
 		switch q.kind {
 		case kindNoul:
-			// NoulWithCriteria leaves criteria nil when both outcomes are nil.
-			if q.instructions == nil && q.criteria == nil {
+			if encodesNull(q.instructions) && !describesOutcome(q.criteria) {
 				return fmt.Errorf("noul question %q has neither instructions nor criteria; at least one is required", name)
 			}
 		case kindChoice:
