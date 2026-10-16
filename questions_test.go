@@ -65,6 +65,18 @@ func TestValidateQuestions(t *testing.T) {
 	must.EqError(t, validateQuestions(map[string]Question{"f": Score("q", nil)}),
 		`score question "f" has 0 criteria; at least two scores are required`)
 
+	must.NoError(t, validateQuestions(map[string]Question{"n": NoulWithCriteria(nil, nil, "no")}),
+		must.Sprint("a described outcome stands in for instructions"))
+	must.EqError(t, validateQuestions(map[string]Question{"n": Noul(nil)}),
+		`noul question "n" has neither instructions nor criteria; at least one is required`)
+	must.EqError(t, validateQuestions(map[string]Question{"n": NoulWithCriteria(nil, nil, nil)}),
+		`noul question "n" has neither instructions nor criteria; at least one is required`)
+
+	must.EqError(t, validateQuestions(map[string]Question{"c": Choice("q", nil)}),
+		`choice question "c" has no criteria; at least one choice is required`)
+	must.EqError(t, validateQuestions(map[string]Question{"c": Choice("q", map[string]any{})}),
+		`choice question "c" has no criteria; at least one choice is required`)
+
 	must.EqError(t, validateQuestions(map[string]Question{"z": {}}),
 		`question "z" is the zero Question; use Noul, Choice, or Score`)
 }

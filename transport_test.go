@@ -2,6 +2,7 @@ package typesafe
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -92,17 +93,15 @@ func TestSystemOneRequestAndResponse(t *testing.T) {
 	must.Eq(t, want.String(), got.String())
 }
 
-func TestSystemOneNullStateAndModelOverride(t *testing.T) {
+func TestSystemOneModelOverride(t *testing.T) {
 	c, rec := newServer(t, Config{Model: "jev-cfg"}, func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, noulResponse)
 	})
-	_, err := c.SystemOne(t.Context(), Request{Questions: map[string]Question{"q": Noul("x")}, Model: "jev-req"})
+	_, err := c.SystemOne(t.Context(), Request{State: "s", Questions: map[string]Question{"q": Noul("x")}, Model: "jev-req"})
 	must.NoError(t, err)
-	body := string(*rec.lastBody.Load())
-	must.StrContains(t, body, `"state":null`)
-	must.StrContains(t, body, `"model":"jev-req"`)
+	must.StrContains(t, string(*rec.lastBody.Load()), `"model":"jev-req"`)
 
-	_, err = c.SystemOne(t.Context(), Request{Questions: map[string]Question{"q": Noul("x")}})
+	_, err = c.SystemOne(t.Context(), Request{State: "s", Questions: map[string]Question{"q": Noul("x")}})
 	must.NoError(t, err)
 	must.StrContains(t, string(*rec.lastBody.Load()), `"model":"jev-cfg"`)
 }
@@ -110,13 +109,55 @@ func TestSystemOneNullStateAndModelOverride(t *testing.T) {
 func TestSystemOneValidatesBeforeSending(t *testing.T) {
 	c, rec := newServer(t, Config{}, func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, noulResponse) })
 
-	_, err := c.SystemOne(t.Context(), Request{})
+	q := map[string]Question{"q": Noul("x")}
+	_, err := c.SystemOne(t.Context(), Request{Questions: q})
+	must.EqError(t, err, "typesafe: state is required")
+	_, err = c.SystemOne(t.Context(), Request{State: map[string]any(nil), Questions: q})
+	must.EqError(t, err, "typesafe: state is required", must.Sprint("a typed nil marshals to null too"))
+
+	_, err = c.SystemOne(t.Context(), Request{State: "s"})
 	must.EqError(t, err, "typesafe: at least one question is required")
 
-	_, err = c.SystemOne(t.Context(), Request{Questions: map[string]Question{"s": Score("q", []any{"one"})}})
+	_, err = c.SystemOne(t.Context(), Request{State: "s", Questions: map[string]Question{"s": Score("q", []any{"one"})}})
 	must.EqError(t, err, `typesafe: score question "s" has 1 criteria; at least two scores are required`)
 
 	must.Eq(t, int32(0), rec.requests.Load())
+}
+
+func TestCompression(t *testing.T) {
+	big := strings.Repeat("x", minCompressedBody)
+	var calls atomic.Int32
+	c, rec := newServer(t, Config{}, func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			writeJSON(w, 503, `{}`)
+			return
+		}
+		writeJSON(w, 200, noulResponse)
+	})
+	_, err := c.SystemOne(t.Context(), Request{State: big, Questions: map[string]Question{"q": Noul("x")}})
+	must.NoError(t, err)
+	must.Eq(t, int32(2), rec.requests.Load())
+	r := rec.last.Load()
+	must.Eq(t, "gzip", r.Header.Get("Content-Encoding"))
+	must.Eq(t, "application/json", r.Header.Get("Content-Type"))
+	zr, err := gzip.NewReader(bytes.NewReader(*rec.lastBody.Load()))
+	must.NoError(t, err)
+	plain, err := io.ReadAll(zr)
+	must.NoError(t, err)
+	must.StrContains(t, string(plain), `"state":"`+big+`"`, must.Sprint("the retry resends the compressed body"))
+
+	_, err = c.SystemOne(t.Context(), Request{State: "short", Questions: map[string]Question{"q": Noul("x")}})
+	must.NoError(t, err)
+	must.Eq(t, "", rec.last.Load().Header.Get("Content-Encoding"), must.Sprint("bodies under 1 KiB are sent as-is"))
+	must.StrContains(t, string(*rec.lastBody.Load()), `"state":"short"`)
+
+	off, rec := newServer(t, Config{DisableCompression: true}, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, noulResponse)
+	})
+	_, err = off.SystemOne(t.Context(), Request{State: big, Questions: map[string]Question{"q": Noul("x")}})
+	must.NoError(t, err)
+	must.Eq(t, "", rec.last.Load().Header.Get("Content-Encoding"))
+	must.StrContains(t, string(*rec.lastBody.Load()), `"state":"`+big+`"`)
 }
 
 func TestSystemOneWarnsOnUnknownAnswerType(t *testing.T) {
@@ -145,7 +186,7 @@ func TestSystemOneDecodeError(t *testing.T) {
 		w.Header().Set("X-TypeSafe-Request-Id", "req_bad")
 		writeJSON(w, 200, `{"model":`)
 	})
-	_, err := c.SystemOne(t.Context(), Request{Questions: map[string]Question{"q": Noul("x")}})
+	_, err := c.SystemOne(t.Context(), Request{State: "s", Questions: map[string]Question{"q": Noul("x")}})
 	must.Error(t, err)
 	must.StrHasPrefix(t, "typesafe: POST /v1/systemone: decode response (request req_bad): ", err.Error())
 	var syntaxErr *json.SyntaxError
@@ -178,7 +219,7 @@ func TestAPIErrorNotRetriedOn400(t *testing.T) {
 		w.Header().Set("X-TypeSafe-Request-Id", "req_400")
 		writeJSON(w, 400, `{"error":"bad question"}`)
 	})
-	_, err := c.SystemOne(t.Context(), Request{Questions: map[string]Question{"q": Noul("x")}})
+	_, err := c.SystemOne(t.Context(), Request{State: "s", Questions: map[string]Question{"q": Noul("x")}})
 	must.EqError(t, err, "typesafe: POST /v1/systemone: 400 bad question (request req_400)")
 	var apiErr *Error
 	must.True(t, errors.As(err, &apiErr))
@@ -196,7 +237,7 @@ func TestRetryOn529ThenSuccess(t *testing.T) {
 		}
 		writeJSON(w, 200, noulResponse)
 	})
-	res, err := c.SystemOne(t.Context(), Request{Questions: map[string]Question{"q": Noul("x")}})
+	res, err := c.SystemOne(t.Context(), Request{State: "s", Questions: map[string]Question{"q": Noul("x")}})
 	must.NoError(t, err)
 	must.Eq(t, Answer(NoulAnswer{Noul: 0.95}), res.Answers["is_urgent"])
 	must.Eq(t, int32(2), rec.requests.Load())
@@ -207,7 +248,7 @@ func TestRetryExhaustionReturnsLastError(t *testing.T) {
 	c, rec := newServer(t, Config{}, func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 429, `{"error":"slow down"}`)
 	})
-	_, err := c.SystemOne(t.Context(), Request{Questions: map[string]Question{"q": Noul("x")}})
+	_, err := c.SystemOne(t.Context(), Request{State: "s", Questions: map[string]Question{"q": Noul("x")}})
 	must.True(t, errors.Is(err, ErrRateLimited))
 	must.Eq(t, int32(3), rec.requests.Load(), must.Sprint("1 attempt + 2 retries"))
 	must.Eq(t, "2", rec.last.Load().Header.Get("X-TypeSafe-Retry-Count"))
@@ -217,7 +258,7 @@ func TestRetriesDisabled(t *testing.T) {
 	c, rec := newServer(t, Config{Retry: &RetryPolicy{}}, func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 503, ``)
 	})
-	_, err := c.SystemOne(t.Context(), Request{Questions: map[string]Question{"q": Noul("x")}})
+	_, err := c.SystemOne(t.Context(), Request{State: "s", Questions: map[string]Question{"q": Noul("x")}})
 	var apiErr *Error
 	must.True(t, errors.As(err, &apiErr))
 	must.Eq(t, 503, apiErr.Status)
@@ -235,7 +276,7 @@ func TestRetryLogsAtInfo(t *testing.T) {
 		}
 		writeJSON(w, 200, noulResponse)
 	})
-	_, err := c.SystemOne(t.Context(), Request{Questions: map[string]Question{"q": Noul("x")}})
+	_, err := c.SystemOne(t.Context(), Request{State: "s", Questions: map[string]Question{"q": Noul("x")}})
 	must.NoError(t, err)
 	out := logs.String()
 	must.StrContains(t, out, "level=INFO")
@@ -272,7 +313,7 @@ func TestCancelDuringBackoff(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		_, err := c.SystemOne(ctx, Request{Questions: map[string]Question{"q": Noul("x")}})
+		_, err := c.SystemOne(ctx, Request{State: "s", Questions: map[string]Question{"q": Noul("x")}})
 		done <- err
 	}()
 	select {
@@ -300,7 +341,7 @@ func TestAttemptTimeoutIsRetried(t *testing.T) {
 		}
 		writeJSON(w, 200, noulResponse)
 	})
-	res, err := c.SystemOne(t.Context(), Request{Questions: map[string]Question{"q": Noul("x")}})
+	res, err := c.SystemOne(t.Context(), Request{State: "s", Questions: map[string]Question{"q": Noul("x")}})
 	must.NoError(t, err)
 	must.Eq(t, Answer(NoulAnswer{Noul: 0.95}), res.Answers["is_urgent"])
 	must.Eq(t, int32(2), rec.requests.Load())
@@ -312,7 +353,7 @@ func TestCallerDeadlineIsNotRetried(t *testing.T) {
 	})
 	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
-	_, err := c.SystemOne(ctx, Request{Questions: map[string]Question{"q": Noul("x")}})
+	_, err := c.SystemOne(ctx, Request{State: "s", Questions: map[string]Question{"q": Noul("x")}})
 	must.True(t, errors.Is(err, context.DeadlineExceeded))
 	must.Eq(t, int32(1), rec.requests.Load())
 }

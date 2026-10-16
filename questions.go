@@ -24,7 +24,7 @@ type Question struct {
 }
 
 // Noul is a yes/no question. The answer is a NoulAnswer with the probability
-// of yes.
+// of yes. nil instructions require NoulWithCriteria with a described outcome.
 func Noul(instructions any) Question {
 	return Question{kind: kindNoul, instructions: instructions}
 }
@@ -47,7 +47,8 @@ func NoulWithCriteria(instructions any, yes, no any) Question {
 }
 
 // Choice selects one option from options, a map of label to description; a
-// nil description leaves the label undescribed. The answer is a ChoiceAnswer.
+// nil description leaves the label undescribed. At least one option is
+// required. The answer is a ChoiceAnswer.
 func Choice(instructions any, options map[string]any) Question {
 	return Question{kind: kindChoice, instructions: instructions, criteria: options}
 }
@@ -74,15 +75,25 @@ func (q Question) MarshalJSON() ([]byte, error) {
 }
 
 // validateQuestions applies the checks the JS SDK makes before sending: at
-// least one question, and at least two score levels. Server-side limits
-// (255 choice options, 10 score levels) are left to the server's 422.
+// least one question, a noul with instructions or a described outcome, a
+// choice with at least one option, and at least two score levels.
+// Server-side limits (255 choice options, 10 score levels) are left to the
+// server's 422.
 func validateQuestions(qs map[string]Question) error {
 	if len(qs) == 0 {
 		return errors.New("at least one question is required")
 	}
 	for name, q := range qs {
 		switch q.kind {
-		case kindNoul, kindChoice:
+		case kindNoul:
+			// NoulWithCriteria leaves criteria nil when both outcomes are nil.
+			if q.instructions == nil && q.criteria == nil {
+				return fmt.Errorf("noul question %q has neither instructions nor criteria; at least one is required", name)
+			}
+		case kindChoice:
+			if options, _ := q.criteria.(map[string]any); len(options) == 0 {
+				return fmt.Errorf("choice question %q has no criteria; at least one choice is required", name)
+			}
 		case kindScore:
 			levels, _ := q.criteria.([]any)
 			if len(levels) < 2 {
