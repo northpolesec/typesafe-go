@@ -1,0 +1,9 @@
+# Install with `brew install lefthook && lefthook install`; skip once with `git push --no-verify`.
+# No globs: a workflow pin can break when its upstream tag moves, without any local change.
+pre-push:
+  parallel: true
+  commands:
+    go:
+      run: make ci
+    workflows:
+      run: make lint/workflows

@@ -2,6 +2,7 @@ package typesafe
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -35,6 +36,9 @@ const (
 	systemOnePath = "/v1/systemone"
 	modelsPath    = "/v1/models"
 
+	// minCompressedBody is the smallest request body sent gzip-compressed; a
+	// smaller one fits in one TCP segment, so compressing it only costs CPU.
+	minCompressedBody = 1 << 10
 	// maxBody bounds a response body read; a real response is kilobytes.
 	maxBody = 8 << 20
 )
@@ -65,6 +69,9 @@ type Config struct {
 	// Retry is the retry policy. nil means DefaultRetryPolicy();
 	// &RetryPolicy{} disables retries.
 	Retry *RetryPolicy
+	// DisableCompression sends every request body uncompressed. By default a
+	// body of 1 KiB or more is sent with Content-Encoding: gzip.
+	DisableCompression bool
 	// HTTPClient sends requests. nil means a package-owned *http.Client.
 	HTTPClient HTTPDoer
 	// Logger receives DEBUG attempt summaries, INFO retry notices, and WARN
@@ -79,6 +86,7 @@ type Client struct {
 	model   string
 	timeout time.Duration
 	retry   RetryPolicy
+	gzip    bool
 	http    HTTPDoer
 	logger  *slog.Logger
 }
@@ -138,6 +146,7 @@ func New(cfg Config) (*Client, error) {
 		model:   model,
 		timeout: timeout,
 		retry:   retry,
+		gzip:    !cfg.DisableCompression,
 		http:    httpClient,
 		logger:  logger,
 	}, nil
@@ -176,7 +185,8 @@ var errResponseTooLarge = fmt.Errorf("response body exceeds %d MiB", maxBody>>20
 // Request is the input to Client.SystemOne.
 type Request struct {
 	// State is the content to evaluate: a string, or a map or slice that
-	// marshals to a JSON object or array. nil is sent as null.
+	// marshals to a JSON object or array. It is required: a State that
+	// marshals to null is rejected before sending.
 	State any
 	// Questions is a non-empty map of question name to Question. Answers
 	// come back under the same names.
@@ -186,7 +196,7 @@ type Request struct {
 }
 
 type systemOneWire struct {
-	State     any                 `json:"state"`
+	State     json.RawMessage     `json:"state"`
 	Model     string              `json:"model"`
 	Questions map[string]Question `json:"questions"`
 }
@@ -195,14 +205,22 @@ type systemOneWire struct {
 //
 // Config.Timeout bounds each attempt. A deadline on ctx bounds the whole
 // call, including retries and backoff; cancelling ctx stops the call at once
-// and is never retried. Validation errors (no questions, a Score with fewer
-// than two levels) are returned before any request is sent.
+// and is never retried. Validation errors (no state, no questions, a Noul
+// with nothing to ask, a Choice with no options, a Score with fewer than two
+// levels) are returned before any request is sent.
 //
 // A non-2xx response after retries is a *Error; match ErrAuthentication,
 // ErrRateLimited, and ErrOverloaded with errors.Is, or inspect Error.Status.
 // Connection failures and timeouts surface as the underlying net and context
 // errors.
 func (c *Client) SystemOne(ctx context.Context, req Request) (*Result, error) {
+	state, err := json.Marshal(req.State)
+	if err != nil {
+		return nil, fmt.Errorf("typesafe: encode state: %w", err)
+	}
+	if string(state) == "null" {
+		return nil, errors.New("typesafe: state is required")
+	}
 	if err := validateQuestions(req.Questions); err != nil {
 		return nil, fmt.Errorf("typesafe: %w", err)
 	}
@@ -211,7 +229,7 @@ func (c *Client) SystemOne(ctx context.Context, req Request) (*Result, error) {
 		model = c.model
 	}
 	var res Result
-	requestID, err := c.do(ctx, http.MethodPost, systemOnePath, systemOneWire{State: req.State, Model: model, Questions: req.Questions}, &res)
+	requestID, err := c.do(ctx, http.MethodPost, systemOnePath, systemOneWire{State: state, Model: model, Questions: req.Questions}, &res)
 	if err != nil {
 		return nil, err
 	}
@@ -242,16 +260,24 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) (st
 	wrap := func(err error) error { return fmt.Errorf("typesafe: %s %s: %w", method, path, err) }
 
 	var payload []byte
+	var encoding string
 	if body != nil {
 		var err error
 		if payload, err = json.Marshal(body); err != nil {
 			return "", wrap(fmt.Errorf("encode request: %w", err))
 		}
+		// Compressed once; every attempt resends the same bytes.
+		if c.gzip && len(payload) >= minCompressedBody {
+			if payload, err = gzipBytes(payload); err != nil {
+				return "", wrap(fmt.Errorf("compress request: %w", err))
+			}
+			encoding = "gzip"
+		}
 	}
 	endpoint := c.baseURL + path
 
 	for attempt := 0; ; attempt++ {
-		status, header, respBody, err := c.attempt(ctx, method, path, endpoint, payload, attempt)
+		status, header, respBody, err := c.attempt(ctx, method, path, endpoint, payload, encoding, attempt)
 
 		var reason string
 		switch {
@@ -293,7 +319,7 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) (st
 // attempt performs one HTTP round trip, including reading the body, under
 // Config.Timeout. A non-nil error means no usable response; status and header
 // are set only when err is nil.
-func (c *Client) attempt(ctx context.Context, method, path, endpoint string, payload []byte, n int) (status int, header http.Header, body []byte, err error) {
+func (c *Client) attempt(ctx context.Context, method, path, endpoint string, payload []byte, encoding string, n int) (status int, header http.Header, body []byte, err error) {
 	actx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
@@ -309,6 +335,9 @@ func (c *Client) attempt(ctx context.Context, method, path, endpoint string, pay
 	req.Header.Set("Accept", "application/json")
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	if encoding != "" {
+		req.Header.Set("Content-Encoding", encoding)
 	}
 	req.Header.Set("User-Agent", "typesafe-go/"+Version)
 	req.Header.Set("X-TypeSafe-SDK", "typesafe-go/"+Version)
@@ -336,6 +365,19 @@ func (c *Client) attempt(ctx context.Context, method, path, endpoint string, pay
 		return 0, nil, nil, errResponseTooLarge
 	}
 	return resp.StatusCode, resp.Header, respBody, nil
+}
+
+// gzipBytes returns b gzip-compressed.
+func gzipBytes(b []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	if _, err := zw.Write(b); err != nil {
+		return nil, err
+	}
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 // sleep waits d or until ctx is done, whichever is first.

@@ -26,6 +26,12 @@ func TestResultUnmarshalNoul(t *testing.T) {
 	must.Eq(t, Answer(NoulAnswer{Noul: 0.95}), r.Answers["is_urgent"])
 }
 
+func TestResultUnmarshalNullUsage(t *testing.T) {
+	var r Result
+	must.NoError(t, json.Unmarshal([]byte(`{"model":"m","answers":{},"usage":{"input_tokens":null,"output_tokens":null}}`), &r))
+	must.Eq(t, Usage{}, r.Usage)
+}
+
 func TestResultUnmarshalChoice(t *testing.T) {
 	var r Result
 	must.NoError(t, json.Unmarshal([]byte(choiceResponse), &r))

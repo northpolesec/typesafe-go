@@ -4,7 +4,7 @@ Ledger of the `typesafe-sdk-js` port into this module, in the format of `chat-go
 
 ## Upstream baseline
 
-Ported from typesafe-sdk-js `66880cc` (v0.6.0), cross-checked against typesafe-sdk-python v0.7.1. Last checked 2026-10-06: JS unchanged; Python v0.7.2 (`f078f1e`) adds only an optional `http2` packaging extra, which needs nothing here since `net/http` negotiates HTTP/2 over TLS. Wire contract checked against `openapi.json` version 0.2.0 (`/v1/systemone`, `/v1/models`); every schema, required field, and the `noul`/`choice`/`score` discriminator match this module. When re-checking, diff fresh clones against these commits and diff `openapi.json` against version 0.2.0.
+Ported from typesafe-sdk-js `b844cd1` (v0.7.0), cross-checked against typesafe-sdk-python `f36e685` (v0.7.5). Last checked 2026-10-16. Wire contract checked against https://docs.typesafe.ai/api.md as of 2026-10-16 (request rules, compression, 413/415); `openapi.json` version 0.2.0 matches the non-image schemas, but the docs no longer serve it at `/openapi.json`. When re-checking, diff fresh clones against these commits and diff `api.md`, `images.md`, and `primitives/box.md`.
 
 ## Global divergences
 
@@ -20,7 +20,7 @@ Ported from typesafe-sdk-js `66880cc` (v0.6.0), cross-checked against typesafe-s
 - `instructions: null` (JS `noul()` default) → key omitted when nil; API accepts both
 - Request and response bodies are never logged (JS logs them at `debug`); `Error()` never includes the raw body
 - 255-option and 10-level limits left to the server's 422 (neither upstream SDK checks them); score minimum follows JS and api.md (≥2), not Python or openapi.json (`minItems: 1`)
-- `Request.State` nil marshals as `state: null`, as JS allows; `openapi.json` excludes null (expect a 422; not verified live)
+- `Request.State` that marshals to `null` (nil or a typed nil) is rejected before sending, as JS v0.7.0 rejects `null` and `undefined`
 - Score `instructions` is optional here, per `openapi.json` and both SDKs; api.md marks it required
 - `Question` is opaque with constructors; upstream is a plain tagged object
 - `Answer` is a sealed interface (`NoulAnswer | ChoiceAnswer | ScoreAnswer | UnknownAnswer`); upstream infers types from the question literal; unknown answer types are kept as `UnknownAnswer` and named in one WARN (Python drops them with a warning; JS passes them through)
@@ -28,6 +28,10 @@ Ported from typesafe-sdk-js `66880cc` (v0.6.0), cross-checked against typesafe-s
 - Response body capped at 8 MiB with an explicit error; upstream has no cap
 - `Config.APIKey` is `TrimSpace`d before validation (Python strips too; JS does not); interior whitespace and non-printable bytes are still rejected
 - `DefaultBaseURL` and `DefaultModel` are exported constants
+- Request bodies of 1 KiB or more are compressed with `gzip`, not `zstd`: the API accepts both, and Go's standard library has no zstd encoder. `Config.DisableCompression` replaces `compression: false`
+- `NaN` and `±Inf` fail `json.Marshal` before sending; JS v0.7.0 and Python v0.7.4 send them as strings
+- A `null` token count in `Usage` decodes as 0; JS types it `number | null`
+- Images, assets, `withAssets`, multipart bodies, and `box` questions are not ported. Upstream marks them experimental (the `TypeSafe-Danger-Zone-Images: true` header, "can change between releases"). A `box` answer decodes as `UnknownAnswer`
 
 ## Files
 
@@ -35,9 +39,11 @@ Ported from typesafe-sdk-js `66880cc` (v0.6.0), cross-checked against typesafe-s
 | --- | --- | --- | --- |
 | `src/client.ts` | `client.go` | `client_test.go`, `transport_test.go` | `TypeSafeClientConfig` → `Config`; `#request`/`fetchWithRetries`/`attempt`/`backOff` → `do`/`attempt`/`sleep`; `bufferResponse` → `io.ReadAll(io.LimitReader)`; `#requestCount` log tag dropped (no mutable state); `mergeHeaders` dropped with `defaultHeaders`; API key validated in `New` (Python's rule); `BaseURL` must parse as absolute http(s) |
 | `src/types.ts` | `questions.go`, `answers.go`, `client.go` | `questions_test.go`, `answers_test.go` | `EntryType`/`JsonValue` → `any`; `Questions` → `map[string]Question`; `SystemOneRequest` → `Request`; `SystemOneResult` → `Result`; `ResultFor<T>` inference → `DecodeAnswers` into a caller struct; `Usage` ints; `ModelCard` → `Model` |
-| `src/questions.ts` | `questions.go` | `questions_test.go` | `noul(instructions=null, criteria?)` → `Noul` + `NoulWithCriteria(yes, no)`; `score(instructions, [..])` → `Score(instructions, []any)`; `choice` map shape enforced by the constructor signature; `validateQuestions` keeps the two JS checks |
+| `src/questions.ts` | `questions.go` | `questions_test.go` | `noul(instructions=null, criteria?)` → `Noul` + `NoulWithCriteria(yes, no)`; `score(instructions, [..])` → `Score(instructions, []any)`; `choice` map shape enforced by the constructor signature; `validateQuestions` keeps the JS checks (empty set, noul without instructions or a described outcome, empty choice, score under two levels); `box` not ported |
 | `src/errors.ts` | `errors.go` | `errors_test.go` | `APIError` + 7 subclasses → `*Error` + `Is`; `RateLimitError.retryAfterMs` → `Error.RetryAfter` on every `*Error`; `APIConnectionError`/`APITimeoutError`/`APIUserAbortError` → wrapped `net`/`context` errors; `describe()` never emits the raw body |
 | `src/retry.ts` | `retry.go` | `retry_test.go` | `retryDelayMs(attempt, headers, policy, random)` → `backoffDelay(n, h, p, r, now)`; `parseRetryAfter` returns `(d, ok)` so `retry-after-ms: 0` is honored; HTTP-date via `http.ParseTime`; `sleep(ms, signal)` → `sleep(ctx, d)` with a stopped timer |
+| `src/compression.ts` | `client.go` (`gzipBytes`, `minCompressedBody`) | `transport_test.go` | zstd → gzip; `resolveCompression` → `Config.DisableCompression` |
+| `src/assets.ts` | — | — | not ported; see Global divergences |
 | `src/resources/models.ts` | `client.go` (`Models`) | `transport_test.go` | `Models` resource class → method on `Client`; `unwrapModels` shape check kept |
 | `src/api-promise.ts` | `client.go` (`do` return), `answers.go` (`Result.RequestID`) | `transport_test.go` | `APIPromise` dropped; request id returned from `do` |
 | `src/env.ts` | `client.go` (`fromCodeOrEnv`) | `client_test.go` | same three env vars; `TYPESAFE_LOG_LEVEL` dropped |

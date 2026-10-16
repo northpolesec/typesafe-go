@@ -17,3 +17,14 @@ if a, ok := res.Answers["tone"].(typesafe.ChoiceAnswer); ok {
 ```
 
 See `PORTING.md` for how this maps onto the official JS SDK and where it diverges.
+
+## Git hooks
+
+Install [lefthook](https://github.com/evilmartians/lefthook) to run CI's checks before each push:
+
+```shell
+brew install lefthook
+lefthook install
+```
+
+The pre-push hook runs `make ci` and `make lint/workflows` (actionlint and zizmor, which needs Docker and `gh auth login`). Skip it once with `git push --no-verify`.

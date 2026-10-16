@@ -7,7 +7,8 @@ import (
 	"sort"
 )
 
-// Usage is the token usage for one request.
+// Usage is the token usage for one request. In a Result, a count the API
+// reports as null is 0.
 type Usage struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
