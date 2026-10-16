@@ -32,16 +32,10 @@ jobs:
           go-version-file: go.mod
           cache: false
 
-      - name: Run actionlint
-        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
-
-      - name: Run zizmor
-        uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # ratchet:zizmorcore/zizmor-action@v0.6.4
-        with:
-          advanced-security: false
-          annotations: true
-          persona: pedantic
-          version: 1.30.1
+      - name: Check workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: make lint/workflows
 
   go:
     name: Go
