@@ -109,3 +109,33 @@ func TestAnswerUnmarshalTypeCheck(t *testing.T) {
 	must.NoError(t, json.Unmarshal([]byte(`{"type":"noul","noul":0.1}`), &n))
 	must.Eq(t, 0.1, n.Noul)
 }
+
+// An answer missing a value is an error, never a zero: a noul of 0 reads as
+// "no".
+func TestResultUnmarshalMissingValue(t *testing.T) {
+	cases := map[string]struct {
+		answer string
+		want   string
+	}{
+		"noul":                 {`{"type":"noul"}`, `answer "a": typesafe: noul answer has no "noul"`},
+		"null noul":            {`{"type":"noul","noul":null}`, `answer "a": typesafe: noul answer has no "noul"`},
+		"choice confidence":    {`{"type":"choice","choice":"x","probabilities":{"x":1}}`, `answer "a": typesafe: choice answer has no "confidence"`},
+		"choice probabilities": {`{"type":"choice","choice":"x","confidence":1}`, `answer "a": typesafe: choice answer has no "probabilities"`},
+		"score":                {`{"type":"score","confidence":1,"probabilities":{"0":1}}`, `answer "a": typesafe: score answer has no "score"`},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			var r Result
+			err := json.Unmarshal([]byte(`{"model":"m","answers":{"a":`+tc.answer+`}}`), &r)
+			must.EqError(t, err, tc.want)
+		})
+	}
+}
+
+func TestDecodeAnswersMissingValue(t *testing.T) {
+	r := Result{answers: json.RawMessage(`{"a":{"type":"noul"}}`)}
+	var dst struct {
+		A NoulAnswer `json:"a"`
+	}
+	must.EqError(t, r.DecodeAnswers(&dst), `typesafe: decode answers: typesafe: noul answer has no "noul"`)
+}
