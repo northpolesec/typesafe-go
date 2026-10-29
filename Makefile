@@ -1,8 +1,10 @@
 .PHONY: fmt fmt/check lint lint/workflows test ci
 
-# CI and the pre-push hook both run lint/workflows; bump versions here only.
-# actionlint is not a go.mod tool: its go.yaml.in/yaml/v4 pre-release
-# conflicts with golangci-lint's, and go run builds outside the module graph.
+# CI and the pre-push hook run these; bump versions here only. The linters are
+# not go.mod tools: a tool's requirements become every importer's, which would
+# pull golangci-lint's whole dependency graph into code that uses this SDK.
+# go run builds them outside the module graph.
+GOLANGCI_LINT_VERSION := v2.15.0
 ACTIONLINT_VERSION := v1.7.12
 ZIZMOR_VERSION := 1.30.1
 
@@ -14,7 +16,7 @@ fmt/check:
 	@test -z "$$(gofmt -s -l .)"
 
 lint:
-	go tool golangci-lint run
+	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run
 
 # zizmor's online audits (such as a pin whose tag has moved) need a GitHub
 # token, so this fails rather than run offline and miss them. Under GitHub
