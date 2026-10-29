@@ -84,28 +84,56 @@ func checkAnswerType(b []byte, want string) error {
 	return nil
 }
 
-// UnmarshalJSON decodes a noul answer object and rejects any other type.
+// requireFields rejects an answer object missing any of fields, or holding
+// null there, so an absent value is an error rather than reading as 0: a noul
+// of 0 means "no", which a caller would act on.
+func requireFields(b []byte, kind string, fields ...string) error {
+	var present map[string]json.RawMessage
+	if err := json.Unmarshal(b, &present); err != nil {
+		return err
+	}
+	for _, f := range fields {
+		if v, ok := present[f]; !ok || string(v) == "null" {
+			return fmt.Errorf("typesafe: %s answer has no %q", kind, f)
+		}
+	}
+	return nil
+}
+
+// UnmarshalJSON decodes a noul answer object and rejects any other type, or
+// one without a noul.
 func (a *NoulAnswer) UnmarshalJSON(b []byte) error {
 	if err := checkAnswerType(b, kindNoul); err != nil {
+		return err
+	}
+	if err := requireFields(b, kindNoul, "noul"); err != nil {
 		return err
 	}
 	type plain NoulAnswer
 	return json.Unmarshal(b, (*plain)(a))
 }
 
-// UnmarshalJSON decodes a choice answer object and rejects any other type.
+// UnmarshalJSON decodes a choice answer object and rejects any other type, or
+// one without its choice, confidence or probabilities.
 func (a *ChoiceAnswer) UnmarshalJSON(b []byte) error {
 	if err := checkAnswerType(b, kindChoice); err != nil {
+		return err
+	}
+	if err := requireFields(b, kindChoice, "choice", "confidence", "probabilities"); err != nil {
 		return err
 	}
 	type plain ChoiceAnswer
 	return json.Unmarshal(b, (*plain)(a))
 }
 
-// UnmarshalJSON decodes a score answer object and rejects any other type.
-// encoding/json decodes the "0", "1", ... object keys into int map keys.
+// UnmarshalJSON decodes a score answer object and rejects any other type, or
+// one without its score, confidence or probabilities. encoding/json decodes
+// the "0", "1", ... object keys into int map keys.
 func (a *ScoreAnswer) UnmarshalJSON(b []byte) error {
 	if err := checkAnswerType(b, kindScore); err != nil {
+		return err
+	}
+	if err := requireFields(b, kindScore, "score", "confidence", "probabilities"); err != nil {
 		return err
 	}
 	type plain ScoreAnswer
